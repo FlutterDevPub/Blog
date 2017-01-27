@@ -153,9 +153,120 @@ func setupCluster(advertiseAddr string, clusterAddr string) (*serf.Serf, error) 
 As we can see, we are creating the cluster, only changing the advertise address.
 
 If the creation fails, we return the error of course.
-If the joining fails though, it means that we either didn't get a cluster address, or the cluster doesn't exist (omitting network failures), which means we can safely ignore that and just log it.
+If the joining fails though, it means that we either didn't get a cluster address,
+or the cluster doesn't exist (omitting network failures),
+which means we can safely ignore that and just log it.
 
+To continue with, we will initialize the database and a REST API:
 
+```go
+	theOneAndOnlyNumber := InitTheNumber(42)
+	launchHTTPAPI(theOneAndOnlyNumber)
+```
+
+And this is what the API creation looks like:
+
+```go
+func launchHTTPAPI(db *oneAndOnlyNumber) {
+	go func() {
+		m := mux.NewRouter()
+```
+
+We first asynchronously start our server. Then we declare our getter:
+
+```go
+		m.HandleFunc("/get", func(w http.ResponseWriter, r *http.Request) {
+			val, _ := db.getValue()
+			fmt.Fprintf(w, "%v", val)
+		})
+```
+
+our setter:
+
+```go
+m.HandleFunc("/set/{newVal}", func(w http.ResponseWriter, r *http.Request) {
+			vars := mux.Vars(r)
+			newVal, err := strconv.Atoi(vars["newVal"])
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "%v", err)
+				return
+			}
+
+			db.setValue(newVal)
+
+			fmt.Fprintf(w, "%v", newVal)
+		})
+```
+
+and finally the API endpoint which allows other *nodes* to notify this instance of changes:
+
+```go
+		m.HandleFunc("/notify/{curVal}/{curGeneration}", func(w http.ResponseWriter, r *http.Request) {
+			vars := mux.Vars(r)
+			curVal, err := strconv.Atoi(vars["curVal"])
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "%v", err)
+				return
+			}
+			curGeneration, err := strconv.Atoi(vars["curGeneration"])
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "%v", err)
+				return
+			}
+
+			if changed := db.notifyValue(curVal, curGeneration); changed {
+				log.Printf(
+					"NewVal: %v Gen: %v Notifier: %v",
+					curVal,
+					curGeneration,
+					r.URL.Query().Get("notifier"))
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		log.Fatal(http.ListenAndServe(":8080", m))
+	}()
+}
+```
+
+It's also here where we start our server and print some debug info when getting notified of new values by other *members* of our cluster.
+
+---
+
+Great, we've got a way to talk to our service now. Time to make it actually spread all the information.
+We'll also be printing debug info regularly.
+
+To begin with, let's initiate our *context* (that's always a good idea in the main function).
+We'll also put a value into it, the name of our host, just for the debug logs.
+It's a good thing to put into the context, as it's not something crucial for the functioning of our program,
+and the context will get passed further anyways.
+
+```go
+	ctx := context.Background()
+	if name, err := os.Hostname(); err == nil {
+		ctx = context.WithValue(ctx, "name", name)
+	}
+```
+
+Having done this, we can set up our main loop, including the intervals at which we'll be sending state updates to peers and printing debug info.
+
+```go
+	debugDataPrinterTicker := time.Tick(time.Second * 5)
+	numberBroadcastTicker := time.Tick(time.Second * 2)
+	for {
+		select {
+		case <-numberBroadcastTicker:
+		// Notification code goes here...
+		case <-debugDataPrinterTicker:
+			log.Printf("Members: %v\n", cluster.Members())
+
+			curVal, curGen := theOneAndOnlyNumber.getValue()
+			log.Printf("State: Val: %v Gen: %v\n", curVal, curGen)
+		}
+	}
+```
 
 
 [1]:https://cassandra.apache.org/
