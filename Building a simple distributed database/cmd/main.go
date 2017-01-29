@@ -186,10 +186,11 @@ func notifyOthers(ctx context.Context, otherMembers []serf.Member, db *oneAndOnl
 	} else {
 		randIndex := rand.Int() % len(otherMembers)
 		for i := 0; i < MembersToNotify; i++ {
+			curIndex := i
 			g.Go(func() error {
 				return notifyMember(
 					ctx,
-					otherMembers[(randIndex + i) % len(otherMembers)].Addr.String(),
+					otherMembers[(randIndex + curIndex) % len(otherMembers)].Addr.String(),
 					db)
 			})
 		}

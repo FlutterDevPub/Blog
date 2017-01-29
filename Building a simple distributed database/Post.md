@@ -3,11 +3,11 @@
 ## Introduction
 With the advent of *distributed applications*, we see new storage solutions constantly.
 They include, but are not limitted to, [Cassandra][1], [Redis][2], [CockroachDB][3], [Consul][4] or [RethinkDB][5].
-Most of you probably use one, or more, of them. 
+Most of you probably use one, or more, of them.
 
-They seem to be really complex systems, because they actually are, which can't be denied. 
+They seem to be really complex systems, because they actually are, which can't be denied.
 But it's pretty easy to write a simple, one value, database featuring *high availability*.
-You probably wouldn't use anything near this in production, but it should be a fruitful learning experience for you nevertheless. 
+You probably wouldn't use anything near this in production, but it should be a fruitful learning experience for you nevertheless.
 If you're interested, read on!
 
 ## Dependencies
@@ -26,8 +26,8 @@ We'll also use those for convenience's sake:
 
 ## Small overview
 What will we build? We'll build a one-value *clustered* database. Which means, numerous instances of our application will be able to work together.
-You'll be able to set or get the value using a REST interface. The value will then shortly be spread across the cluster using the Gossip protocol. 
-Which means, every node tells a part of the clsuter about the current state of the variable in set intevals. But because later each of those also tells a part of the cluster about the state, the whole cluster ends up having been informed. 
+You'll be able to set or get the value using a REST interface. The value will then shortly be spread across the cluster using the Gossip protocol.
+Which means, every node tells a part of the clsuter about the current state of the variable in set intevals. But because later each of those also tells a part of the cluster about the state, the whole cluster ends up having been informed.
 
 It'll use Serf for easy cluster membership, which uses SWIM under the hood. SWIM is a more advanced Gossipl-like algorithm, which you can read on about [here][6].
 
@@ -74,7 +74,7 @@ func InitTheNumber(val int) *oneAndOnlyNumber {
 }
 ```
 
-We'll also need a way to set and get the value. 
+We'll also need a way to set and get the value.
 Setting the value will also advance the generation count, so when we notify the rest of this cluster, we will overwrite their values and generation counts.
 
 ```go
@@ -158,6 +158,7 @@ or the cluster doesn't exist (omitting network failures),
 which means we can safely ignore that and just log it.
 
 To continue with, we will initialize the database and a REST API:
+(I've really chosen the number at random... really!)
 
 ```go
 	theOneAndOnlyNumber := InitTheNumber(42)
@@ -268,6 +269,188 @@ Having done this, we can set up our main loop, including the intervals at which 
 	}
 ```
 
+Ok, that seems to be it.
+
+Just kidding. Time to finish up our service with the notification code.
+We'll now get a list of **other** members in the cluster, set a timeout, and asynchronously notify a part of those others.
+
+```go
+		case <-numberBroadcastTicker:
+			members := getOtherMembers(cluster)
+
+			ctx, _ := context.WithTimeout(ctx, time.Second*2)
+			go notifyOthers(ctx, members, theOneAndOnlyNumber)
+```
+
+Now, let's look at the *getOtherMembers* function. It's actually just a function scanning through the memberlist, deleting ourselves and other nodes that aren't alive at the moment.
+
+```go
+func getOtherMembers(cluster *serf.Serf) []serf.Member {
+	members := cluster.Members()
+	for i := 0; i < len(members); {
+		if members[i].Name == cluster.LocalMember().Name || members[i].Status != serf.StatusAlive {
+			if i < len(members)-1 {
+				members = append(members[:i], members[i + 1:]...)
+			} else {
+				members = members[:i]
+			}
+		} else {
+			i++
+		}
+	}
+	return members
+}
+```
+
+There's not much to it I suppose. It's using slicing to cut out or cut off members not conforming to our predicates.
+
+Finally the function we use to notify others:
+
+```go
+func notifyOthers(ctx context.Context, otherMembers []serf.Member, db *oneAndOnlyNumber) {
+	g, ctx := errgroup.WithContext(ctx)
+
+	if len(otherMembers) <= MembersToNotify {
+		for _, member := range otherMembers {
+			curMember := member
+			g.Go(func() error {
+				return notifyMember(ctx, curMember.Addr.String(), db)
+			})
+		}
+	} else {
+		randIndex := rand.Int() % len(otherMembers)
+		for i := 0; i < MembersToNotify; i++ {
+			g.Go(func() error {
+				return notifyMember(
+					ctx,
+					otherMembers[(randIndex + i) % len(otherMembers)].Addr.String(),
+					db)
+			})
+		}
+	}
+
+	err := g.Wait()
+	if err != nil {
+		log.Printf("Error when notifying other members: %v", err)
+	}
+}
+```
+
+If there are only two members then it sends the notifications to them, otherwise it chooses a random index in the members array and chooses subsequent members from there on.
+How does the errgroup work? It's a nifty library Brian Ketelsen wrote a [great article][7] about. It's basically a wait group which also gathers errors and aborts when one happens.
+
+Now to finish our code, the *notifyMember* function:
+
+```go
+func notifyMember(ctx context.Context, addr string, db *oneAndOnlyNumber) error {
+	val, gen := db.getValue()
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://%v:8080/notify/%v/%v?notifier=%v", addr, val, gen, ctx.Value("name")), nil)
+	if err != nil {
+		return errors.Wrap(err, "Couldn't create request")
+	}
+	req = req.WithContext(ctx)
+
+	_, err = http.DefaultClient.Do(req)
+	if err != nil {
+		return errors.Wrap(err, "Couldn't make request")
+	}
+	return nil
+}
+
+```
+
+We craft a path with the formula *{nodeAddress}:8080/notify/{curVal}/{curGen}?notifier={selfHostName}*
+We add the context to the request, so we get the timeout functionality, and finally make the request.
+
+And that's actually all there is to the code.
+
+## Testing our database
+We'll test our database using docker. The necessary dockerfile to put into your project directory looks like this:
+
+```go
+FROM alpine
+WORKDIR /app
+COPY distApp /app/
+ENTRYPOINT ["./distApp"]
+```
+
+Now, first build your application (if you're not on linux, you have to set the env variables GOOS=linux and GOARCH=amd64)
+Later build the docker image:
+
+```
+docker build -t distapp .
+```
+
+And finally we can launch it. To supply the necessary environment variables, we'll need to know what ip address the containers will get.
+First run:
+
+```
+docker network inspect bridge
+```
+
+Bridge is the default network containers get assigned to. You should get something like this:
+
+```
+[
+    {
+        "Name": "bridge",
+        "Id": "b56a19697ed9d30488f189d5517fd79f04a4df70c8bbc07d8f3c49a491f10433",
+        "Created": "2017-01-29T10:48:05.1592086Z",
+        "Scope": "local",
+        "Driver": "bridge",
+        "EnableIPv6": false,
+        "IPAM": {
+            "Driver": "default",
+            "Options": null,
+            "Config": [
+                {
+                    "Subnet": "172.17.0.0/16",
+                    "Gateway": "172.17.0.1" <-- this is what we need
+                }
+            ]
+        },
+        "Internal": false,
+        "Attachable": false,
+        "Containers": {},
+        "Options": {
+            "com.docker.network.bridge.default_bridge": "true",
+            "com.docker.network.bridge.enable_icc": "true",
+            "com.docker.network.bridge.enable_ip_masquerade": "true",
+            "com.docker.network.bridge.host_binding_ipv4": "0.0.0.0",
+            "com.docker.network.bridge.name": "docker0",
+            "com.docker.network.driver.mtu": "1500"
+        },
+        "Labels": {}
+    }
+]
+```
+
+What's interesting to us is the gateway. In this case, our containers would be spawned with ip addresses from 172.17.0.2
+
+So now we can start a few containers:
+```
+docker run -e ADVERTISE_ADDR=172.17.0.2 -p 8080:8080 distapp
+docker run -e ADVERTISE_ADDR=172.17.0.3 -e CLUSTER_ADDR=172.17.0.2 -p 8081:8080 distapp
+docker run -e ADVERTISE_ADDR=172.17.0.4 -e CLUSTER_ADDR=172.17.0.3 -p 8082:8080 distapp
+docker run -e ADVERTISE_ADDR=172.17.0.5 -e CLUSTER_ADDR=172.17.0.4 -p 8083:8080 distapp
+```
+
+Now you can test your deployment by stopping and starting containers, and setting/getting the variables at:
+```
+localhost:8080/set/5
+localhost:8082/get/5
+etc...
+```
+
+## Conclusion
+
+What's important, this is a really basic distributed system, it may become inconsistent (if you update the value on two different machines simultaneously, the cluster will have two values depending on the machine).
+If you want to learn more, read about CAP, consensus, Paxos, RAFT, gossip, and data replication, they are all very interesting topics (at least in my opinion).
+
+Anyways, I hope you had fun creating a small distributed system and encourage you to build your own, more advanced one, it'll be a great learning experience for sure!
+
+The whole code is available on [my Github][8].
+
 
 [1]:https://cassandra.apache.org/
 [2]:https://redis.io/
@@ -275,3 +458,5 @@ Having done this, we can set up our main loop, including the intervals at which 
 [4]:https://www.consul.io/
 [5]:https://www.rethinkdb.com/
 [6]:https://www.cs.cornell.edu/~asdas/research/dsn02-swim.pdf
+[7]:https://www.oreilly.com/learning/run-strikingly-fast-parallel-file-searches-in-go-with-sync-errgroup
+[8]:https://github.com/cube2222/Blog/tree/master/Building%20a%20simple%20distributed%20database
