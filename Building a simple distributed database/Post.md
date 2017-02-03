@@ -1,12 +1,12 @@
-# Practical Golang: Bulding a simple distributed one-value database with Hashicorp Serf
+# Practical Golang: Building a simple, distributed one-value database with Hashicorp Serf
 
 ## Introduction
-With the advent of *distributed applications*, we see new storage solutions constantly.
-They include, but are not limitted to, [Cassandra][1], [Redis][2], [CockroachDB][3], [Consul][4] or [RethinkDB][5].
+With the advent of *distributed applications*, we see new storage solutions emerging constantly.
+They include, but are not limited to, [Cassandra][1], [Redis][2], [CockroachDB][3], [Consul][4] or [RethinkDB][5].
 Most of you probably use one, or more, of them.
 
-They seem to be really complex systems, because they actually are, which can't be denied.
-But it's pretty easy to write a simple, one value, database featuring *high availability*.
+They seem to be really complex systems, because they actually are. This can't be denied.
+But it's pretty easy to write a simple, one value database, featuring *high availability*.
 You probably wouldn't use anything near this in production, but it should be a fruitful learning experience for you nevertheless.
 If you're interested, read on!
 
@@ -27,15 +27,15 @@ We'll also use those for convenience's sake:
 ## Small overview
 What will we build? We'll build a one-value *clustered* database. Which means, numerous instances of our application will be able to work together.
 You'll be able to set or get the value using a REST interface. The value will then shortly be spread across the cluster using the Gossip protocol.
-Which means, every node tells a part of the clsuter about the current state of the variable in set intevals. But because later each of those also tells a part of the cluster about the state, the whole cluster ends up having been informed.
+Which means, every node tells a part of the cluster about the current state of the variable in set intervals. But because later each of those also tells a part of the cluster about the state, the whole cluster ends up having been informed shortly.
 
-It'll use Serf for easy cluster membership, which uses SWIM under the hood. SWIM is a more advanced Gossipl-like algorithm, which you can read on about [here][6].
+It'll use Serf for easy cluster membership, which uses SWIM under the hood. SWIM is a more advanced Gossip-like algorithm, which you can read on about [here][6].
 
 Now let's get to the implementation...
 
 ## Getting started
 
-First we'll of course have to put in all our imports:
+First, we'll of course have to put in all our imports:
 ```go
 import (
 	"context"
@@ -55,10 +55,9 @@ import (
 )
 ```
 
-Following this it's time to write a simple thread-safe one-value store.
-An important thing is, the database will also hold the *generation* of the variable.
-This way, when one instance gets notified about a new value, it can check if the incoming notification actually has a higher generation count.
-So the our structure will hold exactly this: the number, generation and a mutex.
+Following this, it's time to write a simple thread-safe, one-value store.
+An important thing is, the database will also hold the *generation* of the variable. This way, when one instance gets notified about a new value, it can check if the incoming notification actually has a higher generation count. Only then, will it change the current local value.
+So our database structure will hold exactly this: the number, generation and a mutex.
 
 ```go
 type oneAndOnlyNumber struct {
@@ -114,7 +113,7 @@ We'll also create a const describing how many nodes we will notify about the new
 const MembersToNotify = 2
 ```
 
-Now let's get to the actual functioning of the application. First we'll have to start an instance of serf, using two variables. The address of our instance in the network and the -optional- address of the cluster to joing.
+Now let's get to the actual functioning of the application. First we'll have to start an instance of serf, using two variables. The address of our instance in the network and the -optional- address of the cluster to join.
 
 ```go
 func main() {
@@ -152,12 +151,11 @@ func setupCluster(advertiseAddr string, clusterAddr string) (*serf.Serf, error) 
 
 As we can see, we are creating the cluster, only changing the advertise address.
 
-If the creation fails, we return the error of course.
+If the creation fails, we of course return the error.
 If the joining fails though, it means that we either didn't get a cluster address,
-or the cluster doesn't exist (omitting network failures),
-which means we can safely ignore that and just log it.
+or the cluster doesn't exist (omitting network failures), which means we can safely ignore that and just log it.
 
-To continue with, we will initialize the database and a REST API:
+To continue with, we initialize the database and the REST API:
 (I've really chosen the number at random... really!)
 
 ```go
@@ -425,7 +423,7 @@ Bridge is the default network containers get assigned to. You should get somethi
 ]
 ```
 
-What's interesting to us is the gateway. In this case, our containers would be spawned with ip addresses from 172.17.0.2
+What's important for us is the gateway. In this case, our containers would be spawned with IP addresses from 172.17.0.2
 
 So now we can start a few containers:
 ```
@@ -435,7 +433,7 @@ docker run -e ADVERTISE_ADDR=172.17.0.4 -e CLUSTER_ADDR=172.17.0.3 -p 8082:8080 
 docker run -e ADVERTISE_ADDR=172.17.0.5 -e CLUSTER_ADDR=172.17.0.4 -p 8083:8080 distapp
 ```
 
-Now you can test your deployment by stopping and starting containers, and setting/getting the variables at:
+Next on you can test your deployment by stopping and starting containers, and setting/getting the variables at:
 ```
 localhost:8080/set/5
 localhost:8082/get/5
