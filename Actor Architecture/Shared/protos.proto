@@ -1,0 +1,14 @@
+syntax = "proto3";
+package shared;
+
+message CountWordsRequest {
+    string text = 1;
+}
+
+message CountWordsResponse {
+     map<string, int32> result = 1;
+}
+
+service Hello {
+    rpc CountWords (CountWordsRequest) returns (CountWordsResponse) {}
+}
