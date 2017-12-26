@@ -7,7 +7,7 @@ In this blog post series though, we'll create a database which will provide *lin
 We'll build this using a distributed commit log. So we'll have a log of operations which gets replicated between all database servers in the cluster. We will achieve *consensus* in regards to the data contained by the subsequent messages in the loge by using Raft Consensus. It's a well known consensus protocol used in, amongst others,[Consul][3], [etcd][5], [CockroachDB][7] or [RethinkDB][6].
 
 ## Raft Consensus
-*"What's consensus"* - you may ask yourself. We say that multiple parties achieve consensus when they all agree on some value. In our case, they'll agree on the values at each subsequent index in the log.
+*"What's consensus?"* - you may ask yourself. We say that multiple parties achieve consensus when they all agree on some value. In our case, they'll agree on the values at each subsequent index in the log.
 
 OK, we know what consensus is, but why use Raft? Well, it works and is relatively simple to reason about. It all began with [Paxos][8], a protocol widely known to be hard to understand. Opinions on that vary, but it surely is difficult to implement correctly, as described in [Paxos Made Life][9]. Alternatives emerged and one of the most widely used is Raft.
 
