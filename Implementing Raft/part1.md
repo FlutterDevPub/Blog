@@ -19,14 +19,18 @@ Okay, ready to dive in? Let's go then!
 First, we'll need to get a few packages we'll depend on. I'll go over each of them here:
 #### Serf
 Address: ```github.com/hashicorp/serf/serf```
+
 Serf provides a cluster abstraction. It manages health checks and membership using the SWIM protocol.
 #### gRPC
 Address: ```google.golang.org/grpc```
+
 gRPC is a remote procedure call library, which also autogenerates the clients for us.
 Install the protobuf compiler as described in https://grpc.io/docs/quickstart/go.html.
 
 We'll also use a gRPC connection cache I've written, which you can get here:
+
 ```github.com/cube2222/grpc-connection-cache```
+
 I won't go over it as it wouldn't add anything meaningful here, but you can go over the code, as it's just one short file.
 #### Others
 We'll also use ```github.com/uber-go/atomic``` as a convenient wrapper over atomic variables, ```github.com/satori/go.uuid``` to generate uuid's and ```github.com/gorilla/mux```  as our router.
